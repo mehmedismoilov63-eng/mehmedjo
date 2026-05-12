@@ -1,0 +1,198 @@
+{
+  "system.volume_up": {
+    "patterns": [
+      "увеличить громкость",
+      "сделай громче", 
+      "громкость вверх",
+      "volume up",
+      "громче",
+      "громкость на [\\d]+"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.volume_down": {
+    "patterns": [
+      "уменьшить громкость",
+      "сделай тише",
+      "громкость вниз", 
+      "volume down",
+      "тише",
+      "громкость на [\\d]+"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.volume_mute": {
+    "patterns": [
+      "выключить звук",
+      "беззвучный режим",
+      "mute", 
+      "выключи звук",
+      "тихий режим"
+    ]
+  },
+  "system.brightness_up": {
+    "patterns": [
+      "увеличить яркость",
+      "сделай ярче",
+      "яркость вверх",
+      "brightness up", 
+      "ярче",
+      "яркость на [\\d]+"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.brightness_down": {
+    "patterns": [
+      "уменьшить яркость",
+      "сделай темнее",
+      "яркость вниз",
+      "brightness down",
+      "темнее", 
+      "яркость на [\\d]+"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.screenshot": {
+    "patterns": [
+      "сделать скриншот",
+      "снимок экрана",
+      "скриншот",
+      "screenshot",
+      "фотография экрана"
+    ]
+  },
+  "system.shutdown": {
+    "patterns": [
+      "выключить компьютер",
+      "выключи компьютер",
+      "выключение",
+      "shutdown",
+      "turn off",
+      "завершение работы"
+    ]
+  },
+  "system.sleep": {
+    "patterns": [
+      "усыпить компьютер",
+      "режим сна",
+      "sleep mode",
+      "sleep",
+      "сон",
+      "в спящий режим"
+    ]
+  },
+  "system.restart": {
+    "patterns": [
+      "перезагрузить компьютер",
+      "перезагрузка",
+      "restart",
+      "reboot",
+      "перезапуск"
+    ]
+  },
+  "app.open": {
+    "patterns": [
+      "открыть ([\\w\\s]+)",
+      "запустить ([\\w\\s]+)", 
+      "([\\w\\s]+) открой",
+      "open ([\\w\\s]+)",
+      "start ([\\w\\s]+)"
+    ],
+    "parameters": {
+      "app_name": {"type": "regex_group", "group": 1}
+    }
+  },
+  "app.close": {
+    "patterns": [
+      "закрыть ([\\w\\s]+)",
+      "закрой ([\\w\\s]+)",
+      "завершить ([\\w\\s]+)", 
+      "close ([\\w\\s]+)",
+      "exit ([\\w\\s]+)"
+    ],
+    "parameters": {
+      "app_name": {"type": "regex_group", "group": 1}
+    }
+  },
+  "weather.get": {
+    "patterns": [
+      "какая погода",
+      "погода сегодня",
+      "температура",
+      "weather",
+      "какая погода сегодня",
+      "сегодняшняя погода"
+    ],
+    "parameters": {
+      "location": {"type": "string", "default": "Ташкент"}
+    }
+  },
+  "translator.translate": {
+    "patterns": [
+      "перевести ([\\w\\s]+) на ([\\w\\s]+)",
+      "([\\w\\s]+) переведи на ([\\w\\s]+)",
+      "translate ([\\w\\s]+) to ([\\w\\s]+)",
+      "([\\w\\s]+) на ([\\w\\s]+) язык"
+    ],
+    "parameters": {
+      "text": {"type": "regex_group", "group": 1},
+      "target_lang": {"type": "regex_group", "group": 2}
+    }
+  },
+  "calculator.calculate": {
+    "patterns": [
+      "посчитай ([\\d\\s\\+\\-\\*\\/\\(\\)]+)",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) посчитай",
+      "calculate ([\\d\\s\\+\\-\\*\\/\\(\\)]+)",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) равно",
+      "сколько будет ([\\d\\s\\+\\-\\*\\/\\(\\)]+)"
+    ],
+    "parameters": {
+      "expression": {"type": "regex_group", "group": 1}
+    }
+  },
+  "media.music_play": {
+    "patterns": [
+      "включи музыку",
+      "играть музыку",
+      "music play",
+      "play music",
+      "музыка"
+    ]
+  },
+  "media.music_pause": {
+    "patterns": [
+      "пауза музыки",
+      "остановить музыку",
+      "music pause",
+      "pause music",
+      "пауза"
+    ]
+  },
+  "media.music_next": {
+    "patterns": [
+      "следующий трек",
+      "next track",
+      "music next",
+      "следующая песня",
+      "вперед"
+    ]
+  },
+  "media.music_previous": {
+    "patterns": [
+      "предыдущий трек", 
+      "previous track",
+      "music previous",
+      "предыдущая песня",
+      "назад"
+    ]
+  }
+}

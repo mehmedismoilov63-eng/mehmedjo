@@ -1,0 +1,200 @@
+{
+  "system.volume_up": {
+    "patterns": [
+      "ovozni oshir",
+      "ovoz baland qil", 
+      "ovozni ko'tar",
+      "volume up",
+      "balandroq qil",
+      "ovozni [\\d]+ ga oshir",
+      "ovoz [\\d]+ ga oshir"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.volume_down": {
+    "patterns": [
+      "ovozni kamaytir",
+      "ovozni pastga tushir",
+      "ovozni pasaytir", 
+      "volume down",
+      "pastroq qil",
+      "ovozni [\\d]+ ga kamaytir",
+      "ovoz [\\d]+ ga kamaytir"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.volume_mute": {
+    "patterns": [
+      "ovozni o'chir",
+      "ovozni beshik qil",
+      "sust qil",
+      "mute", 
+      "ovoz o'chir",
+      "tovushsiz qil"
+    ]
+  },
+  "system.brightness_up": {
+    "patterns": [
+      "ekranni yorqin qil",
+      "yorqinlikni oshir",
+      "ekran yorqin",
+      "brightness up",
+      "yorqinroq qil",
+      "ekranni [\\d]+ ga yorqin qil"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.brightness_down": {
+    "patterns": [
+      "ekranni kamaytir",
+      "yorqinlikni kamaytir", 
+      "ekran qorong'i",
+      "brightness down",
+      "qorong'iroq qil",
+      "ekranni [\\d]+ ga kamaytir"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.screenshot": {
+    "patterns": [
+      "skrinshot ol",
+      "ekran rasmini olish",
+      "rasmga olish",
+      "screenshot",
+      "ekran rasm"
+    ]
+  },
+  "system.shutdown": {
+    "patterns": [
+      "kompyuterni o'chir",
+      "kompyuterni yop",
+      "o'chirish",
+      "shutdown",
+      "turn off",
+      "tugatish"
+    ]
+  },
+  "system.sleep": {
+    "patterns": [
+      "kompyuterni uxlating",
+      "uxlat",
+      "sleep mode",
+      "sleep",
+      "uyqu rejimi",
+      "uyquga qo'y"
+    ]
+  },
+  "system.restart": {
+    "patterns": [
+      "kompyuterni qayta yukla",
+      "qayta ishga tushir",
+      "restart",
+      "reboot",
+      "qayta yuklash"
+    ]
+  },
+  "app.open": {
+    "patterns": [
+      "([\\w\\s]+) ni och",
+      "([\\w\\s]+) och", 
+      "([\\w\\s]+) ishga tushir",
+      "open ([\\w\\s]+)",
+      "start ([\\w\\s]+)",
+      "([\\w\\s]+) ni ishga tushir"
+    ],
+    "parameters": {
+      "app_name": {"type": "regex_group", "group": 1}
+    }
+  },
+  "app.close": {
+    "patterns": [
+      "([\\w\\s]+) ni yop",
+      "([\\w\\s]+) yop",
+      "([\\w\\s]+) tugat", 
+      "close ([\\w\\s]+)",
+      "exit ([\\w\\s]+)",
+      "([\\w\\s]+) ni yopib qo'y"
+    ],
+    "parameters": {
+      "app_name": {"type": "regex_group", "group": 1}
+    }
+  },
+  "weather.get": {
+    "patterns": [
+      "bugun havo qanday",
+      "ob-havo",
+      "havo harorati",
+      "weather",
+      "havo qanday",
+      "bugungi ob-havo"
+    ],
+    "parameters": {
+      "location": {"type": "string", "default": "Tashkent"}
+    }
+  },
+  "translator.translate": {
+    "patterns": [
+      "([\\w\\s]+) ni ([\\w\\s]+) ga tarjima qil",
+      "([\\w\\s]+) ni ([\\w\\s]+) ga o'girish",
+      "translate ([\\w\\s]+) to ([\\w\\s]+)",
+      "([\\w\\s]+) dan ([\\w\\s]+) ga tarjima qil"
+    ],
+    "parameters": {
+      "text": {"type": "regex_group", "group": 1},
+      "target_lang": {"type": "regex_group", "group": 2}
+    }
+  },
+  "calculator.calculate": {
+    "patterns": [
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) ni hisobla",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) hisobla",
+      "calculate ([\\d\\s\\+\\-\\*\\/\\(\\)]+)",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+)=",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) ning natijasi"
+    ],
+    "parameters": {
+      "expression": {"type": "regex_group", "group": 1}
+    }
+  },
+  "media.music_play": {
+    "patterns": [
+      "musiqani ijro et",
+      "musiqani yoq",
+      "music play",
+      "play music",
+      "qo'shiq tingla"
+    ]
+  },
+  "media.music_pause": {
+    "patterns": [
+      "musiqani to'xtat",
+      "music pause",
+      "pause music",
+      "to'xtat"
+    ]
+  },
+  "media.music_next": {
+    "patterns": [
+      "keyingi qo'shiq",
+      "next track",
+      "music next",
+      "keyingisi"
+    ]
+  },
+  "media.music_previous": {
+    "patterns": [
+      "oldingi qo'shiq", 
+      "previous track",
+      "music previous",
+      "oldingisi"
+    ]
+  }
+}

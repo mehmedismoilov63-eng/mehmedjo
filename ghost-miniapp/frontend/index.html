@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0e0e14" />
+  <title>GHOST — Claude Bridge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header id="header">
+    <div class="header-left">
+      <div class="logo-wrap">
+        <span class="logo-icon">👻</span>
+      </div>
+      <div class="header-info">
+        <span class="header-title">Claude Bridge</span>
+        <span class="header-sub">VS Code ↔ Telegram</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="agent-badge" class="badge-offline">
+        <span class="badge-dot"></span>
+        <span id="badge-label">offline</span>
+      </div>
+      <button id="btn-clear" class="icon-btn" title="Tarixni tozalash" aria-label="Tozalash">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Chat -->
+  <main id="chat" role="log" aria-live="polite" aria-label="Suhbat">
+    <div id="empty-state" aria-hidden="true">
+      <div class="empty-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.3">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+      </div>
+      <p class="empty-title">Prompt yozing</p>
+      <p class="empty-sub">VS Code ga yuboriladi, natijani screenshot orqali ko'rasiz</p>
+    </div>
+  </main>
+
+  <!-- Input -->
+  <footer id="footer">
+    <div id="input-wrap">
+      <textarea
+        id="prompt-input"
+        placeholder="Prompt yozing..."
+        rows="1"
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="Prompt maydoni"
+      ></textarea>
+      <button id="btn-send" disabled aria-label="Yuborish">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+    <p class="input-hint">Enter — yuborish &nbsp;·&nbsp; Shift+Enter — yangi qator</p>
+  </footer>
+
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="Screenshot" hidden>
+  <div id="lightbox-backdrop"></div>
+  <div id="lightbox-content">
+    <div id="lightbox-toolbar">
+      <span id="lightbox-label"></span>
+      <div class="lb-actions">
+        <button id="btn-download" class="lb-btn" title="Yuklab olish" aria-label="Yuklab olish">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </button>
+        <button id="btn-lb-close" class="lb-btn" title="Yopish" aria-label="Yopish">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <img id="lightbox-img" src="" alt="Screenshot" />
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

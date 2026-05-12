@@ -1,0 +1,43 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+ghost_env/
+venv/
+env/
+.venv/
+
+# Logs
+logs/*.log
+*.log
+
+# Data
+data/voice_profiles/
+data/config.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Temp
+*.tmp
+*.temp
+test_tts.mp3
+screenshots/

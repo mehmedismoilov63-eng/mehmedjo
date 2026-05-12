@@ -1,0 +1,261 @@
+{
+  "greeting.hello": {
+    "patterns": [
+      "salom",
+      "assalomu alaykum",
+      "salom alekum",
+      "hello",
+      "hayr",
+      "qalaysiz",
+      "yaxshimisiz"
+    ],
+    "responses": [
+      "Salom! Nima yordam bera olaman?",
+      "Assalomu alaykum! Qanday yordam kerak?",
+      "Hello! How can I help you?"
+    ]
+  },
+  "greeting.how_are_you": {
+    "patterns": [
+      "qalaysiz",
+      "yaxshimisiz",
+      "how are you",
+      "qandaysan"
+    ],
+    "responses": [
+      "Yaxshi, rahmat! Sizchi?",
+      "I'm fine, thank you! And you?",
+      "Yaxshi, ishlayapman. Nima qilish kerak?"
+    ]
+  },
+  "system.volume_up": {
+    "patterns": [
+      "ovozni oshir",
+      "ovoz baland qil", 
+      "ovozni ko'tar",
+      "volume up",
+      "balandroq qil",
+      "ovozni [\\d]+ ga oshir",
+      "ovoz [\\d]+ ga oshir"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.volume_down": {
+    "patterns": [
+      "ovozni kamaytir",
+      "ovozni pastga tushir",
+      "ovozni pasaytir", 
+      "volume down",
+      "ovozni [\\d]+ ga kamaytir",
+      "ovoz [\\d]+ ga kamaytir"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.volume_mute": {
+    "patterns": [
+      "ovozni o'chir",
+      "ovozni shu",
+      "volume mute",
+      "ovozni o'chirib qoy",
+      "ovozni o'chir"
+    ]
+  },
+  "system.screenshot": {
+    "patterns": [
+      "skrinshot ol",
+      "skrinshot olish",
+      "screenshot",
+      "rasmga olish",
+      "ekranni rasnga olish",
+      "skrinshot",
+      "rasmga olish"
+    ]
+  },
+  "app.open": {
+    "patterns": [
+      "(.+) ni och",
+      "(.+) och",
+      "open (.+)",
+      "och (.+)",
+      "start (.+)",
+      "(.+) ni ishga tushir"
+    ],
+    "parameters": {
+      "app_name": {"type": "regex_group", "group": 1}
+    }
+  },
+  "app.close": {
+    "patterns": [
+      "(.+) ni yop",
+      "(.+) yop",
+      "close (.+)",
+      "yop (.+)",
+      "quit (.+)",
+      "(.+) ni yopish"
+    ],
+    "parameters": {
+      "app_name": {"type": "regex_group", "group": 1}
+    }
+  },
+  "system.brightness_up": {
+    "patterns": [
+      "yorqinlikni oshir",
+      "yorqinlikni ko'tar",
+      "brightness up",
+      "ekran yorqinligini oshir",
+      "yorqinlik [\\d]+ ga oshir"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.brightness_down": {
+    "patterns": [
+      "yorqinlikni kamaytir",
+      "yorqinlikni pasaytir",
+      "brightness down",
+      "ekran yorqinligini kamaytir",
+      "yorqinlik [\\d]+ ga kamaytir"
+    ],
+    "parameters": {
+      "amount": {"type": "number", "default": 10}
+    }
+  },
+  "system.shutdown": {
+    "patterns": [
+      "kompyuterni o'chir",
+      "kompyuterni yop",
+      "shutdown",
+      "turn off",
+      "kompyuterni to'xtat"
+    ]
+  },
+  "system.restart": {
+    "patterns": [
+      "kompyuterni qayta ishga tushir",
+      "kompyuterni restart qil",
+      "restart",
+      "reboot",
+      "qayta ishga tushir"
+    ]
+  },
+  "system.sleep": {
+    "patterns": [
+      "kompyuterni uxlantir",
+      "sleep",
+      "uqlat",
+      "uxlat"
+    ]
+  },
+  "search.web": {
+    "patterns": [
+      "(.+) ni qidir",
+      "qidir (.+)",
+      "search (.+)",
+      "google (.+)",
+      "internetda qidir (.+)"
+    ],
+    "parameters": {
+      "text": {"type": "regex_group", "group": 1}
+    }
+  },
+  "reminder.set": {
+    "patterns": [
+      "(.+) haqida eslatma ber",
+      "eslatma (.+)",
+      "reminder (.+)",
+      "eslatma qil (.+)"
+    ],
+    "parameters": {
+      "text": {"type": "regex_group", "group": 1}
+    }
+  },
+  "weather.current": {
+    "patterns": [
+      "ob havo qanday",
+      "ob havo",
+      "weather",
+      "havo qanday",
+      "bugungi havo"
+    ]
+  },
+  "time.current": {
+    "patterns": [
+      "soat necha",
+      "vaqt qancha",
+      "what time",
+      "soat",
+      "vaqt"
+    ]
+  },
+  "date.current": {
+    "patterns": [
+      "bugungi sana",
+      "sana necha",
+      "what date",
+      "sana",
+      "bugun"
+    ]
+  },
+  "help.commands": {
+    "patterns": [
+      "yordam ber",
+      "help",
+      "qanday buyruqlar bor",
+      "nima qila olasan",
+      "buyruqlar ro'yxati"
+    ],
+    "responses": [
+      "Men quyidagi buyruqlarni bajara olaman: ovozni oshir/kamaytir, skrinshot olish, ilovalarni ochish/yopish, qidirish, eslatma berish, vaqtni bilish, ob havoni bilish."
+    ]
+  },
+  "calculator.calculate": {
+    "patterns": [
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) ni hisobla",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) hisobla",
+      "calculate ([\\d\\s\\+\\-\\*\\/\\(\\)]+)",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+)=",
+      "([\\d\\s\\+\\-\\*\\/\\(\\)]+) ning natijasi"
+    ],
+    "parameters": {
+      "expression": {"type": "regex_group", "group": 1}
+    }
+  },
+  "media.music_play": {
+    "patterns": [
+      "musiqani ijro et",
+      "musiqani yoq",
+      "music play",
+      "play music",
+      "qo'shiq tingla"
+    ]
+  },
+  "media.music_pause": {
+    "patterns": [
+      "musiqani to'xtat",
+      "music pause",
+      "pause music",
+      "to'xtat"
+    ]
+  },
+  "media.music_next": {
+    "patterns": [
+      "keyingi qo'shiq",
+      "next track",
+      "music next",
+      "keyingisi"
+    ]
+  },
+  "media.music_previous": {
+    "patterns": [
+      "oldingi qo'shiq", 
+      "previous track",
+      "music previous",
+      "oldingisi"
+    ]
+  }
+}
