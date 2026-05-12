@@ -21,7 +21,10 @@ import asyncio
 from typing import Optional, Callable
 
 try:
-    from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram import (
+        Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup,
+        WebAppInfo, MenuButtonWebApp
+    )
     from telegram.ext import (
         Application, CommandHandler, MessageHandler,
         filters, ContextTypes, CallbackQueryHandler
@@ -39,6 +42,7 @@ class TelegramBotHandler:
     def __init__(self, command_callback: Callable[[str], str]):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         self.owner_id = os.getenv("TELEGRAM_OWNER_ID", "")
+        self.miniapp_url = os.getenv("GHOST_MINIAPP_URL", "").strip()
         self.command_callback = command_callback
         self.app: Optional[object] = None
         self._thread: Optional[threading.Thread] = None
@@ -49,6 +53,20 @@ class TelegramBotHandler:
         # Claude Bridge
         self._claude_bridge = None
         self._claude_mode = False
+        # Pending prompt (ruxsat kutilmoqda)
+        self._pending_enhanced: str = ""
+        self._pending_original: str = ""
+        self._pending_update = None   # update object (reply uchun)
+
+        # AI Voice Processor
+        self._ai_processor = None   # lazy init (start() dan keyin)
+
+        # Live stream
+        self._live_task: Optional[asyncio.Task] = None
+        self._live_interval = 3   # soniya
+
+        # Screen stream (MJPEG)
+        self._streamer = None
 
         if not TELEGRAM_AVAILABLE:
             logger.warning("python-telegram-bot o'rnatilmagan")
@@ -125,12 +143,13 @@ class TelegramBotHandler:
             logger.error(f"Telegram rasm yuborishda xato: {e}")
 
     def send_with_button(self, text: str, button_text: str, callback_data: str):
-        """Inline tugmali xabar yuborish"""
+        """Inline tugmali xabar yuborish (screenshot + bekor qilish)"""
         if not self.owner_id or not self._loop or not self._bot:
             return
         try:
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(button_text, callback_data=callback_data)]
+                [InlineKeyboardButton(button_text, callback_data=callback_data)],
+                [InlineKeyboardButton("❌ Bekor qilish", callback_data="cancel_prompt")],
             ])
 
             async def _send():
@@ -144,6 +163,17 @@ class TelegramBotHandler:
             asyncio.run_coroutine_threadsafe(_send(), self._loop)
         except Exception as e:
             logger.error(f"Tugmali xabar yuborishda xato: {e}")
+
+    def _get_claude_bridge(self):
+        """ClaudeBridge ni lazy init qilish"""
+        if self._claude_bridge is None:
+            from modules.vscode.claude_bridge import ClaudeBridge
+            self._claude_bridge = ClaudeBridge(
+                send_to_telegram=self.send_message,
+                send_photo_to_telegram=self.send_photo,
+                send_with_button=self.send_with_button,
+            )
+        return self._claude_bridge
 
     # ── Internal ────────────────────────────────────────────────────
 
@@ -159,11 +189,18 @@ class TelegramBotHandler:
         # Handlerlar
         self.app.add_handler(CommandHandler("start", self._cmd_start))
         self.app.add_handler(CommandHandler("help", self._cmd_help))
+        self.app.add_handler(CommandHandler("app", self._cmd_app))
         self.app.add_handler(CommandHandler("status", self._cmd_status))
         self.app.add_handler(CommandHandler("unlock", self._cmd_unlock))
         self.app.add_handler(CommandHandler("claude", self._cmd_claude))
         self.app.add_handler(CommandHandler("claude_off", self._cmd_claude_off))
         self.app.add_handler(CommandHandler("copy", self._cmd_copy))
+        self.app.add_handler(CommandHandler("live", self._cmd_live))
+        self.app.add_handler(CommandHandler("live_stop", self._cmd_live_stop))
+        self.app.add_handler(CommandHandler("stream", self._cmd_stream))
+        self.app.add_handler(CommandHandler("stream_stop", self._cmd_stream_stop))
+        self.app.add_handler(CommandHandler("cancel", self._cmd_cancel))
+        self.app.add_handler(CommandHandler("model", self._cmd_model))
         # Inline tugmalar uchun
         self.app.add_handler(CallbackQueryHandler(self._on_callback))
         # Matn xabarlari
@@ -178,13 +215,39 @@ class TelegramBotHandler:
         logger.info("Telegram bot tayyor (matn + audio qabul qiladi)")
         await self.app.initialize()
         await self.app.start()
+        await self._setup_miniapp_menu()
+
+        # AI processor — bot threadida ishga tushirish
+        try:
+            from modules.ai_voice_processor import AIVoiceProcessor
+            self._ai_processor = AIVoiceProcessor(
+                command_callback=self.command_callback,
+                execute_intent_fn=getattr(self, "_execute_intent_fn", None),
+            )
+            if self._ai_processor.is_ai_available():
+                logger.info("Telegram bot: AI processor tayyor ✅")
+            else:
+                logger.warning("Telegram bot: AI yo'q, intent parser ishlatiladi")
+        except Exception as e:
+            logger.error(f"AI processor init xato: {e}")
+
         await self.app.updater.start_polling(drop_pending_updates=True)
         await asyncio.Event().wait()
 
     def _is_owner(self, update: Update) -> bool:
         if not self.owner_id or self.owner_id == "your_telegram_id_here":
-            return False  # Hali owner belgilanmagan - faqat /start orqali
-        return str(update.effective_user.id) == str(self.owner_id)
+            return False
+        user_id = str(update.effective_user.id)
+        # Owner
+        if user_id == str(self.owner_id):
+            return True
+        # Qo'shimcha ruxsat berilganlar
+        allowed = os.getenv("TELEGRAM_ALLOWED_IDS", "")
+        if allowed:
+            allowed_list = [x.strip() for x in allowed.split(",") if x.strip()]
+            if user_id in allowed_list:
+                return True
+        return False
 
     async def _cmd_start(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user_id = str(update.effective_user.id)
@@ -205,7 +268,9 @@ class TelegramBotHandler:
                 "• Громче / тише\n"
                 "• Скриншот\n"
                 "• Soat necha\n\n"
-                "/help - barcha buyruqlar"
+                "/help - barcha buyruqlar\n"
+                "/app - Telegram Mini App",
+                reply_markup=self._miniapp_markup()
             )
             return
 
@@ -216,6 +281,12 @@ class TelegramBotHandler:
         await update.message.reply_text(
             f"👻 Salom {user_name}! GHOST tayyor.\n/help - buyruqlar"
         )
+
+        if self._miniapp_markup():
+            await update.message.reply_text(
+                "GHOST Mini App",
+                reply_markup=self._miniapp_markup()
+            )
 
     def _save_owner_id(self, owner_id: str):
         """Owner ID ni .env ga yozish"""
@@ -232,6 +303,60 @@ class TelegramBotHandler:
             logger.info(f"Owner ID .env ga saqlandi: {owner_id}")
         except Exception as e:
             logger.error(f"Owner ID saqlashda xato: {e}")
+
+    def _miniapp_markup(self):
+        """Telegram Mini App ochish tugmasi"""
+        if not self._miniapp_url_ready():
+            return None
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "GHOST Mini App",
+                web_app=WebAppInfo(url=self.miniapp_url)
+            )
+        ]])
+
+    def _miniapp_url_ready(self) -> bool:
+        if not self.miniapp_url:
+            return False
+        if self.miniapp_url in {"http://localhost:8000", "https://your-app.railway.app"}:
+            return False
+        return self.miniapp_url.startswith("https://")
+
+    async def _setup_miniapp_menu(self):
+        """Bot menu tugmasiga Mini App ni ulash"""
+        if not self._miniapp_url_ready():
+            return
+        try:
+            await self._bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="GHOST",
+                    web_app=WebAppInfo(url=self.miniapp_url)
+                )
+            )
+            logger.info("Telegram Mini App menu tugmasi sozlandi")
+        except Exception as e:
+            logger.warning(f"Mini App menu sozlashda xato: {e}")
+
+    async def _cmd_app(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Telegram Mini App havolasini yuborish"""
+        if not self._is_owner(update):
+            await update.message.reply_text("Ruxsat yo'q.")
+            return
+        if not self.miniapp_url:
+            await update.message.reply_text(
+                "GHOST_MINIAPP_URL .env faylida sozlanmagan."
+            )
+            return
+        if not self._miniapp_url_ready():
+            await update.message.reply_text(
+                "Mini App uchun HTTPS production URL kerak.\n"
+                f"Hozirgi URL: {self.miniapp_url}"
+            )
+            return
+        await update.message.reply_text(
+            "GHOST Mini App",
+            reply_markup=self._miniapp_markup()
+        )
 
     async def _cmd_help(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not self._is_owner(update):
@@ -267,7 +392,18 @@ class TelegramBotHandler:
             "🤖 *Claude Code (VS Code):*\n"
             "/claude - Claude rejimini yoqish\n"
             "/claude [prompt] - bir martalik prompt\n"
-            "/claude\\_off - rejimni o'chirish"
+            "/claude\\_off - rejimni o'chirish\n"
+            "/cancel - promptni bekor qilish (Esc)\n"
+            "/model - model tanlash oynasini ochish\n"
+            "/model [nom] - model qidirish\n\n"
+            "🎥 *Live ekran:*\n"
+            "/live - har 3s screenshot (live)\n"
+            "/live 5 - har 5s screenshot\n"
+            "/live\\_stop - to'xtatish\n\n"
+            "📡 *Real-time stream:*\n"
+            "/stream - brauzerda real vaqtda ekran\n"
+            "/stream vscode - faqat VS Code oynasi\n"
+            "/stream\\_stop - to'xtatish"
         )
 
     async def _cmd_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -289,32 +425,66 @@ class TelegramBotHandler:
             await update.message.reply_text("✅ GHOST ishlayapti")
 
     async def _on_message(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        """Foydalanuvchi xabari kelganda"""
+        """Foydalanuvchi matn xabari — AI orqali erkin nutqni tushunib bajaradi"""
         if not self._is_owner(update):
             await update.message.reply_text("Ruxsat yo'q.")
             return
 
         text = update.message.text.strip()
-        logger.info(f"Telegram buyruq: {text}")
+        logger.info(f"Telegram xabar: {text}")
 
-        # ── Oddiy GHOST buyruqi ──
-        await update.message.reply_text(f"⚙️ Bajarilmoqda: {text}")
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None, self.command_callback, text
-        )
-        if response:
-            await update.message.reply_text(f"✅ {response}")
+        # ── Claude rejimi: har bir xabar to'g'ridan VS Code ga ──
+        if self._claude_mode:
+            self._claude_bridge = self._get_claude_bridge()
+            await self._send_prompt_with_buttons(update, text)
+            return
+
+        # ── AI processor ──
+        if self._ai_processor is None:
+            from modules.ai_voice_processor import AIVoiceProcessor
+            self._ai_processor = AIVoiceProcessor(self.command_callback)
+
+        proc = self._ai_processor
+
+        if proc.is_ai_available():
+            # "Bajarilmoqda..." xabarini yuborib, keyin edit qilamiz
+            status_msg = await update.message.reply_text("⚙️ Bajarilmoqda...")
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, proc.process_text, text, self._claude_bridge
+            )
+            # Status xabarni o'chirish
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await self._handle_ai_result(update, result, text)
+        else:
+            # AI yo'q — oddiy command_callback
+            await update.message.reply_text(f"⚙️ Bajarilmoqda: {text}")
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, self.command_callback, text)
+            if response:
+                await update.message.reply_text(f"✅ {response}")
 
     async def _on_voice(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        """Audio / ovozli xabar kelganda - STT bilan matnга aylantirib bajaradi"""
+        """Audio / ovozli xabar — AI orqali erkin nutqni tushunib bajaradi"""
         if not self._is_owner(update):
             await update.message.reply_text("Ruxsat yo'q.")
             return
 
-        await update.message.reply_text("🎙️ Audio qabul qilindi, tanilmoqda...")
+        # AI processor (bir marta yaratiladi)
+        if self._ai_processor is None:
+            from modules.ai_voice_processor import AIVoiceProcessor
+            self._ai_processor = AIVoiceProcessor(self.command_callback)
+
+        proc = self._ai_processor
+        ai_badge = "🤖 AI" if proc.is_ai_available() else "⚙️"
+        await update.message.reply_text(f"🎙️ Eshitilmoqda... {ai_badge}")
 
         try:
+            import tempfile, os
+
             # Faylni yuklab olish
             if update.message.voice:
                 file = await update.message.voice.get_file()
@@ -323,33 +493,39 @@ class TelegramBotHandler:
                 file = await update.message.audio.get_file()
                 ext = ".mp3"
 
-            import tempfile, os
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
                 tmp_path = tmp.name
-
             await file.download_to_drive(tmp_path)
 
-            # STT - faster-whisper bilan
-            text = await asyncio.get_event_loop().run_in_executor(
-                None, self._transcribe_audio, tmp_path
-            )
-            os.unlink(tmp_path)
+            # STT — Whisper
+            loop = asyncio.get_event_loop()
+            text = await loop.run_in_executor(None, proc.transcribe, tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
             if not text:
-                await update.message.reply_text("❌ Ovozni tanib bo'lmadi")
+                await update.message.reply_text("❌ Ovozni tanib bo'lmadi. Qaytadan urinib ko'ring.")
                 return
 
-            await update.message.reply_text(f"🗣️ Tanildi: *{text}*", parse_mode="Markdown")
-
-            # Buyruqni bajarish
-            response = await asyncio.get_event_loop().run_in_executor(
-                None, self.command_callback, text
+            await update.message.reply_text(
+                f"🗣️ *Tanildi:* `{text}`",
+                parse_mode="Markdown"
             )
-            if response:
-                await update.message.reply_text(f"✅ {response}")
+
+            # Claude bridge (agar mavjud bo'lsa)
+            bridge = self._claude_bridge
+
+            # AI tahlil + bajarish
+            result = await loop.run_in_executor(
+                None, proc.process_text, text, bridge
+            )
+
+            await self._handle_ai_result(update, result, text)
 
         except Exception as e:
-            logger.error(f"Voice message error: {e}")
+            logger.error(f"Voice message error: {e}", exc_info=True)
             await update.message.reply_text(f"❌ Xatolik: {e}")
 
     def _transcribe_audio(self, audio_path: str) -> str:
@@ -409,52 +585,148 @@ class TelegramBotHandler:
     unlock_callback = None
 
     async def _cmd_claude(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        """
-        /claude — Claude Bridge ni ochish
-        """
+        """/claude — Claude rejimini yoqish yoki bir martalik prompt"""
         if not self._is_owner(update):
             await update.message.reply_text("Ruxsat yo'q.")
             return
 
-        miniapp_url = os.getenv("GHOST_MINIAPP_URL", "http://localhost:8000")
-        is_https = miniapp_url.startswith("https://")
+        # Claude bridge yaratish
+        self._claude_bridge = self._get_claude_bridge()
 
-        if is_https:
-            # HTTPS — Telegram Mini App tugmasi
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    "🤖 Claude Bridge",
-                    web_app={"url": miniapp_url}
-                )
-            ]])
+        args = ctx.args
+        if args:
+            # /claude bu kodni tuzat — bir martalik
+            prompt = " ".join(args)
+            await self._send_prompt_with_buttons(update, prompt)
+        else:
+            # /claude — rejimni yoqish
+            self._claude_mode = True
             await update.message.reply_text(
-                "👻 *Claude Bridge*\n\n"
-                "• Prompt yozing → VS Code ga ketadi\n"
-                "• 🔍 Tekshirish → prompt to'g'ri yozilganini ko'ring\n"
-                "• ✅ Natija → Claude javobi tayyor bo'lganda ko'ring",
+                "🤖 *Claude rejimi yoqildi*\n\n"
+                "Endi yozgan har bir xabaringiz VS Code ga yuboriladi.\n"
+                "O'chirish: /claude\\_off",
+                parse_mode="Markdown"
+            )
+
+    async def _handle_ai_result(self, update, result: dict, original_text: str):
+        """AI natijasini Telegram ga yuborish (matn va audio uchun umumiy)"""
+        reply     = result.get("reply", "")
+        msg_type  = result.get("type", "chat")
+        success   = result.get("success", True)
+        screenshot_needed = result.get("screenshot_needed", False)
+
+        # reply ichida raw JSON bo'lsa — tozalash
+        if isinstance(reply, str) and reply.strip().startswith("{"):
+            reply = "✅ Bajarildi"
+
+        # ── Claude prompt → ruxsat so'rab yuborish ──
+        if msg_type == "claude" and success and screenshot_needed:
+            prompt = result.get("claude_prompt", original_text)
+            self._claude_bridge = self._get_claude_bridge()
+            await self._send_prompt_with_buttons(update, prompt)
+            return
+
+        # ── Claude bridge topilmadi ──
+        if msg_type == "claude" and not success:
+            await update.message.reply_text(
+                "⏳ *VS Code ochilmoqda...*\n\nBiroz kuting, tayyor bo'lgach prompt yuboriladi.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # ── Buyruq yoki chat javob ──
+        if not reply:
+            reply = "✅ Bajarildi" if msg_type == "command" else "❓ Javob yo'q"
+
+        if msg_type == "command":
+            icon = "✅" if success else "❌"
+            await update.message.reply_text(f"{icon} {reply}")
+        else:
+            # Chat — markdown bilan, xato bo'lsa oddiy matn
+            try:
+                await update.message.reply_text(reply, parse_mode="Markdown")
+            except Exception:
+                await update.message.reply_text(reply)
+
+    async def _send_prompt_with_buttons(self, update: Update, prompt: str,
+                                         skip_confirm: bool = False):
+        """
+        Promptni AI bilan yaxshilab, foydalanuvchidan ruxsat so'rab, VS Code ga yuboradi.
+        skip_confirm=True bo'lsa ruxsat so'ramasdan to'g'ridan yuboradi.
+        """
+        loop = asyncio.get_event_loop()
+
+        # 1. Promptni AI bilan yaxshilash
+        enhanced = await loop.run_in_executor(
+            None, self._claude_bridge.enhance_prompt, prompt
+        )
+
+        # 2. Agar yaxshilangan prompt original dan farq qilsa — ruxsat so'rash
+        if not skip_confirm and enhanced.strip() != prompt.strip():
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Ha, yubor",    callback_data="confirm_yes"),
+                    InlineKeyboardButton("✏️ Originalini yubor", callback_data="confirm_orig"),
+                ],
+                [
+                    InlineKeyboardButton("❌ Bekor qilish", callback_data="cancel_prompt"),
+                ],
+            ])
+            # Pending sifatida saqlash
+            self._pending_enhanced = enhanced
+            self._pending_original = prompt
+            await update.message.reply_text(
+                f"🤖 *Prompt yaxshilandi. Yuborilsinmi?*\n\n"
+                f"*Asl:* `{prompt[:200]}`\n\n"
+                f"*Yaxshilangan:* `{enhanced[:300]}`",
                 parse_mode="Markdown",
                 reply_markup=keyboard,
             )
-        else:
-            # Local — brauzerda qo'lda ochish
-            await update.message.reply_text(
-                "👻 *Claude Bridge* ishga tushdi!\n\n"
-                f"Brauzerda oching:\n`{miniapp_url}`\n\n"
-                "• Prompt yozing → VS Code ga ketadi\n"
-                "• 🔍 Tekshirish → prompt to'g'ri yozilganini ko'ring\n"
-                "• ✅ Natija → Claude javobi tayyor bo'lganda ko'ring\n\n"
-                "💡 Backend va Agent ishlab turganligini tekshiring",
-                parse_mode="Markdown",
+            return
+
+        # 3. Ruxsat kerak emas yoki bir xil — to'g'ridan yuborish
+        await self._do_send_prompt(update, enhanced or prompt)
+
+    async def _do_send_prompt(self, update_or_query, prompt: str):
+        """Promptni VS Code ga yuborib natija tugmalarini ko'rsatish"""
+        # update yoki query bo'lishi mumkin
+        msg = getattr(update_or_query, "message", update_or_query)
+
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(
+            None, self._claude_bridge.send_prompt_only, prompt
+        )
+        if not ok:
+            await msg.reply_text(
+                "❌ *VS Code ochilmadi*\n\n"
+                "VS Code o'rnatilganligini tekshiring va qayta urinib ko'ring.",
+                parse_mode="Markdown"
             )
+            return
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔍 Tekshirish", callback_data="ss_check"),
+                InlineKeyboardButton("✅ Natija",     callback_data="ss_result"),
+            ],
+            [
+                InlineKeyboardButton("❌ Bekor qilish", callback_data="cancel_prompt"),
+            ],
+        ])
+        preview = prompt[:300] + ("..." if len(prompt) > 300 else "")
+        await msg.reply_text(
+            f"⚡ *Prompt yuborildi*\n\n`{preview}`\n\n"
+            f"_Natija tayyor bo'lgach tugmani bosing:_",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
 
     async def _cmd_claude_off(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        """Claude Code rejimini o'chirish (eski compat)"""
+        """Claude rejimini o'chirish"""
         if not self._is_owner(update):
             return
-        await update.message.reply_text(
-            "ℹ️ Claude Bridge endi Mini App orqali ishlaydi.\n"
-            "/claude — Mini App ni ochish"
-        )
+        self._claude_mode = False
+        await update.message.reply_text("✅ Claude rejimi o'chirildi. Oddiy buyruqlar ishlaydi.")
 
     async def _cmd_copy(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         """/copy - hozirgi clipboard matnini Telegram ga yuborish"""
@@ -486,28 +758,378 @@ class TelegramBotHandler:
 
         data = query.data
 
-        if data == "get_screenshot":
-            await query.edit_message_reply_markup(reply_markup=None)
+        # ── Prompt tasdiqlash ──
+        if data == "confirm_yes":
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            prompt = self._pending_enhanced or self._pending_original
+            self._pending_enhanced = ""
+            self._pending_original = ""
+            if prompt:
+                await self._do_send_prompt(query, prompt)
+            return
+
+        if data == "confirm_orig":
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            prompt = self._pending_original
+            self._pending_enhanced = ""
+            self._pending_original = ""
+            if prompt:
+                await self._do_send_prompt(query, prompt)
+            return
+
+        # ── Screenshot tugmalari ──
+        if data in ("ss_check", "ss_result", "get_screenshot"):
+            caption = "🔍 Tekshirish natijasi" if data == "ss_check" else "✅ Yakuniy natija"
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
             await query.message.reply_text("📸 Screenshot olinmoqda...")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, self._take_quick_screenshot, caption
+            )
+
+        # ── Bekor qilish ──
+        elif data == "cancel_prompt":
+            # Pending promptni ham tozalash
+            self._pending_enhanced = ""
+            self._pending_original = ""
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
 
             loop = asyncio.get_event_loop()
-            if self._claude_bridge:
-                await loop.run_in_executor(
-                    None,
-                    self._claude_bridge.take_and_send_screenshot,
-                    "🤖 Claude natija:"
-                )
+            ok = await loop.run_in_executor(None, self._get_claude_bridge().cancel_prompt)
+            if ok:
+                await query.message.reply_text("⏹ *Prompt bekor qilindi*", parse_mode="Markdown")
             else:
-                await loop.run_in_executor(None, self._take_quick_screenshot)
+                await query.message.reply_text("⏹ Bekor qilindi.")
 
-    def _take_quick_screenshot(self):
-        """Tez screenshot - bridge yo'q bo'lganda"""
+    async def _cmd_cancel(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/cancel — Claude promptini Escape bilan bekor qilish"""
+        if not self._is_owner(update):
+            return
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(None, self._get_claude_bridge().cancel_prompt)
+        if ok:
+            await update.message.reply_text("⏹ Prompt bekor qilindi (Escape bosildi)")
+        else:
+            await update.message.reply_text("❌ VS Code topilmadi")
+
+    async def _cmd_model(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/model [opus|sonnet|haiku] — Kiro modelini almashtirish"""
+        if not self._is_owner(update):
+            return
+
+        bridge = self._get_claude_bridge()
+
+        if not ctx.args:
+            await update.message.reply_text(
+                "🤖 *Model tanlang:*\n\n"
+                "/model opus    — Claude Opus (eng kuchli)\n"
+                "/model sonnet  — Claude Sonnet (tez + kuchli)\n"
+                "/model haiku   — Claude Haiku (eng tez)",
+                parse_mode="Markdown"
+            )
+            return
+
+        model_name = ctx.args[0].lower()
+        labels = {
+            "opus":   "Claude Opus 🧠",
+            "sonnet": "Claude Sonnet ⚡",
+            "haiku":  "Claude Haiku 🚀",
+        }
+
+        if model_name not in labels:
+            await update.message.reply_text(
+                "❌ Noto'g'ri model.\n"
+                "Variantlar: `opus`, `sonnet`, `haiku`",
+                parse_mode="Markdown"
+            )
+            return
+
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(
+            None, bridge.switch_model, model_name
+        )
+
+        if ok:
+            await update.message.reply_text(
+                f"✅ Model o'zgartirildi: *{labels[model_name]}*",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text("❌ VS Code topilmadi")
+
+    async def _cmd_live(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/live [interval] — VS Code ekranini video sifatida yuborish"""
+        if not self._is_owner(update):
+            return
+
+        if self._live_task and not self._live_task.done():
+            await update.message.reply_text("⚠️ Live allaqachon ishlayapti. To'xtatish: /live\\_stop")
+            return
+
+        # Har necha soniyada video (default 10s, min 5s, max 30s)
+        duration = 10
+        if ctx.args:
+            try:
+                duration = max(5, min(30, int(ctx.args[0])))
+            except ValueError:
+                pass
+        self._live_interval = duration
+
+        await update.message.reply_text(
+            f"🎥 *Live video boshlandi*\n"
+            f"Har {duration} soniyada video yuboriladi.\n"
+            f"To'xtatish: /live\\_stop",
+            parse_mode="Markdown"
+        )
+
+        self._live_task = asyncio.create_task(
+            self._live_video_loop(int(update.effective_chat.id), duration)
+        )
+
+    async def _cmd_live_stop(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/live_stop — Live streamni to'xtatish"""
+        if not self._is_owner(update):
+            return
+
+        if self._live_task and not self._live_task.done():
+            self._live_task.cancel()
+            await update.message.reply_text("⏹ Live to'xtatildi.")
+        else:
+            await update.message.reply_text("ℹ️ Live ishlamayapti.")
+
+    async def _cmd_stream(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/stream [vscode] — Real-time MJPEG stream brauzerda"""
+        if not self._is_owner(update):
+            return
+
+        if self._streamer and self._streamer.is_running:
+            await update.message.reply_text(
+                f"📡 Stream allaqachon ishlayapti:\n{self._streamer.public_url}\n\n"
+                "To'xtatish: /stream\\_stop"
+            )
+            return
+
+        await update.message.reply_text("⏳ Stream ishga tushirilmoqda...")
+
+        from core.screen_stream import ScreenStreamer
+        self._streamer = ScreenStreamer()
+
+        # VS Code rejimi
+        vscode_mode = ctx.args and ctx.args[0].lower() == "vscode"
+        if vscode_mode:
+            self._streamer.set_region_vscode()
+
+        loop = asyncio.get_event_loop()
+        url = await loop.run_in_executor(
+            None,
+            lambda: self._streamer.start(fps=10, quality=55, scale=0.65)
+        )
+
+        if url:
+            mode_text = "VS Code oynasi" if vscode_mode else "Butun ekran"
+            await update.message.reply_text(
+                f"📡 *Live Stream tayyor!*\n\n"
+                f"🔗 {url}\n\n"
+                f"📺 Rejim: {mode_text}\n"
+                f"Brauzerda oching — real vaqtda ko'rasiz.\n\n"
+                f"To'xtatish: /stream\\_stop",
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Stream ishga tushmadi.\n\n"
+                "Tekshiring:\n"
+                "• `pip install flask opencv-python pyngrok`\n"
+                "• ngrok token: `.env` ga `NGROK_AUTH_TOKEN=...` qo'shing\n"
+                "  Token olish: https://dashboard.ngrok.com",
+                parse_mode="Markdown"
+            )
+
+    async def _cmd_stream_stop(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """/stream_stop — Streamni to'xtatish"""
+        if not self._is_owner(update):
+            return
+
+        if self._streamer and self._streamer.is_running:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._streamer.stop)
+            self._streamer = None
+            await update.message.reply_text("⏹ Stream to'xtatildi.")
+        else:
+            await update.message.reply_text("ℹ️ Stream ishlamayapti.")
+        """Har duration soniyada ekran videosini olib Telegram ga yuboradi"""
+        loop = asyncio.get_event_loop()
+        count = 0
         try:
-            import pyautogui, tempfile, os
-            img = pyautogui.screenshot()
+            while True:
+                count += 1
+                await self._bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🎥 Video #{count} yozilmoqda ({duration}s)..."
+                )
+                video_bytes = await loop.run_in_executor(
+                    None, self._record_screen, duration
+                )
+                if video_bytes:
+                    import io
+                    await self._bot.send_video(
+                        chat_id=chat_id,
+                        video=io.BytesIO(video_bytes),
+                        caption=f"🎥 Live #{count} · {duration}s",
+                        supports_streaming=True,
+                    )
+                else:
+                    await self._bot.send_message(
+                        chat_id=chat_id, text="❌ Video olib bo'lmadi"
+                    )
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Live video loop xato: {e}")
+            try:
+                await self._bot.send_message(chat_id=chat_id, text=f"❌ Live xato: {e}")
+            except Exception:
+                pass
+
+    def _record_screen(self, duration: int) -> bytes:
+        """Ekranni duration soniya yozib MP4 qaytaradi"""
+        try:
+            import cv2
+            import numpy as np
+            import pyautogui
+            import pygetwindow as gw
+            import tempfile, os, time, io
+
+            # VS Code oynasini aniqlash
+            wins = gw.getWindowsWithTitle("Visual Studio Code") or gw.getWindowsWithTitle("Code")
+            if wins:
+                w = wins[0]
+                w.restore()
+                try:
+                    w.activate()
+                except Exception:
+                    pass
+                time.sleep(0.2)
+                region = (max(0, w.left), max(0, w.top), max(100, w.width), max(100, w.height))
+            else:
+                import pyautogui as pag
+                screen = pag.size()
+                region = (0, 0, screen.width, screen.height)
+
+            x, y, width, height = region
+            # Juft bo'lishi kerak (codec talabi)
+            width  = width  - (width  % 2)
+            height = height - (height % 2)
+
+            fd, tmp_path = tempfile.mkstemp(suffix=".mp4")
+            os.close(fd)
+
+            fps = 8
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            out = cv2.VideoWriter(tmp_path, fourcc, fps, (width, height))
+
+            start = time.time()
+            while time.time() - start < duration:
+                img = pyautogui.screenshot(region=(x, y, width, height))
+                frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                # Resize — kichikroq fayl
+                frame = cv2.resize(frame, (width // 2 * 2, height // 2 * 2))
+                out.write(frame)
+                time.sleep(1 / fps)
+
+            out.release()
+
+            with open(tmp_path, "rb") as f:
+                data = f.read()
+            os.unlink(tmp_path)
+            return data
+
+        except ImportError:
+            logger.error("opencv-python o'rnatilmagan: pip install opencv-python")
+            return b""
+        except Exception as e:
+            logger.error(f"_record_screen xato: {e}")
+            return b""
+
+    def _screenshot_b64(self) -> bytes:
+        """VS Code yoki ekran screenshot → raw PNG bytes"""
+        try:
+            import pyautogui, pygetwindow as gw, io, time
+            wins = gw.getWindowsWithTitle("Visual Studio Code") or gw.getWindowsWithTitle("Code")
+            if wins:
+                w = wins[0]
+                w.restore()
+                try:
+                    w.activate()
+                except Exception:
+                    pass
+                time.sleep(0.2)
+                img = pyautogui.screenshot(region=(
+                    max(0, w.left), max(0, w.top),
+                    max(100, w.width), max(100, w.height)
+                ))
+            else:
+                img = pyautogui.screenshot()
+
+            # Sifatni kamaytirish — Telegram limit 10MB
+            buf = io.BytesIO()
+            img = img.resize((img.width // 2, img.height // 2))
+            img.save(buf, format="JPEG", quality=60, optimize=True)
+            return buf.getvalue()
+        except Exception as e:
+            logger.error(f"Screenshot b64 xato: {e}")
+            return b""
+
+    async def _send_photo_bytes(self, chat_id: int, data: bytes, caption: str = ""):
+        """Bytes dan to'g'ridan-to'g'ri Telegram ga rasm yuborish"""
+        try:
+            import io
+            await self._bot.send_photo(
+                chat_id=chat_id,
+                photo=io.BytesIO(data),
+                caption=caption
+            )
+        except Exception as e:
+            logger.error(f"send_photo_bytes xato: {e}")
+
+    def _take_quick_screenshot(self, caption: str = "📸 Screenshot"):
+        """VS Code screenshot olib Telegram ga yuborish"""
+        try:
+            import pyautogui, tempfile, os, time
+            try:
+                import pygetwindow as gw
+                wins = gw.getWindowsWithTitle("Visual Studio Code") or gw.getWindowsWithTitle("Code")
+                if wins:
+                    w = wins[0]
+                    try:
+                        w.restore()
+                        w.activate()
+                        time.sleep(0.3)
+                    except Exception:
+                        pass   # activate xatosini e'tiborsiz qoldirish
+                    region = (max(0,w.left), max(0,w.top), max(100,w.width), max(100,w.height))
+                    img = pyautogui.screenshot(region=region)
+                else:
+                    img = pyautogui.screenshot()
+            except Exception:
+                img = pyautogui.screenshot()
+
             fd, path = tempfile.mkstemp(suffix=".png")
             os.close(fd)
             img.save(path)
-            self.send_photo(path, "📸 Screenshot")
+            self.send_photo(path, caption)
         except Exception as e:
             self.send_message(f"❌ Screenshot xatosi: {e}")

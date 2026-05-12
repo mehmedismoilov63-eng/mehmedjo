@@ -1,273 +1,605 @@
-﻿'use strict';
-/*  GHOST Claude Bridge ─ */
+'use strict';
 
-const WS_URL = (() => {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.host}/ws/client`;
-})();
-
-const SS_TIMEOUT_MS = 20000;
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 
 const S = {
-  ws: null, online: false,
-  prompts: new Map(), ssTimers: new Map(),
-  reconnTimer: null, lbSrc: '', lbLabel: '',
+  ws: null,
+  reconnectTimer: null,
+  authBlocked: false,
+  agentOnline: false,
+  mode: 'command',
+  session: null,
+  entries: new Map(),
+  confirmPayload: null,
+  confirmAsked: new Set(),
+  lightboxSrc: '',
+  lightboxLabel: '',
 };
 
 const $ = id => document.getElementById(id);
-const $chat    = $('chat');
-const $empty   = $('empty-state');
-const $input   = $('prompt-input');
-const $btnSend = $('btn-send');
-const $btnClear= $('btn-clear');
-const $badge   = $('agent-badge');
-const $badgeLbl= $('badge-label');
-const $lightbox= $('lightbox');
-const $lbImg   = $('lightbox-img');
-const $lbLabel = $('lightbox-label');
-const $lbClose = $('btn-lb-close');
-const $lbDl    = $('btn-download');
-const $toast   = $('toast');
+const els = {
+  app: $('app'),
+  gate: $('gate'),
+  gateMessage: $('gate-message'),
+  userLabel: $('user-label'),
+  badge: $('agent-badge'),
+  badgeLabel: $('badge-label'),
+  metricCpu: $('metric-cpu'),
+  metricRam: $('metric-ram'),
+  metricBattery: $('metric-battery'),
+  metricAgent: $('metric-agent'),
+  input: $('prompt-input'),
+  send: $('btn-send'),
+  clear: $('btn-clear'),
+  refresh: $('btn-refresh'),
+  history: $('history'),
+  empty: $('empty-state'),
+  toast: $('toast'),
+  confirm: $('confirm'),
+  confirmText: $('confirm-text'),
+  confirmCancel: $('btn-confirm-cancel'),
+  confirmOk: $('btn-confirm-ok'),
+  lightbox: $('lightbox'),
+  lightboxImg: $('lightbox-img'),
+  lightboxLabel: $('lightbox-label'),
+  lightboxClose: $('btn-lb-close'),
+  lightboxBackdrop: $('lightbox-backdrop'),
+  download: $('btn-download'),
+};
 
-if (window.Telegram && window.Telegram.WebApp) {
-  const tg = Telegram.WebApp;
-  tg.ready(); tg.expand();
-  tg.setHeaderColor('#13131a');
-  tg.setBackgroundColor('#0d0d12');
+initTelegram();
+bindUi();
+connect();
+
+function initTelegram() {
+  if (!tg) return;
+  tg.ready();
+  tg.expand();
+  try {
+    tg.setHeaderColor('#171b23');
+    tg.setBackgroundColor('#0f1117');
+    tg.disableVerticalSwipes && tg.disableVerticalSwipes();
+  } catch (err) {
+    console.debug(err);
+  }
+  if (tg.MainButton) {
+    tg.MainButton.setText('Yuborish');
+    tg.MainButton.onClick(submit);
+  }
+  if (tg.onEvent) {
+    tg.onEvent('themeChanged', applyTelegramTheme);
+  }
+  applyTelegramTheme();
+}
+
+function applyTelegramTheme() {
+  if (!tg || !tg.themeParams) return;
+  const p = tg.themeParams;
+  const root = document.documentElement;
+  if (p.bg_color && tg.colorScheme === 'light') {
+    root.style.setProperty('--bg', p.bg_color);
+  }
+  if (p.text_color && tg.colorScheme === 'light') {
+    root.style.setProperty('--text', p.text_color);
+  }
+}
+
+function wsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const initData = tg && tg.initData ? tg.initData : '';
+  const qs = initData ? `?init_data=${encodeURIComponent(initData)}` : '';
+  return `${proto}://${location.host}/ws/client${qs}`;
 }
 
 function connect() {
+  if (S.authBlocked) return;
   if (S.ws && S.ws.readyState < WebSocket.CLOSING) return;
-  S.ws = new WebSocket(WS_URL);
-  S.ws.onopen = () => clearTimeout(S.reconnTimer);
-  S.ws.onmessage = function(e) {
-    try { dispatch(JSON.parse(e.data)); } catch(err) { console.error(err); }
+
+  S.ws = new WebSocket(wsUrl());
+  S.ws.onopen = () => {
+    clearTimeout(S.reconnectTimer);
+    wsSend({ type: 'get_status' });
+  };
+  S.ws.onmessage = event => {
+    try {
+      dispatch(JSON.parse(event.data));
+    } catch (err) {
+      console.error(err);
+    }
   };
   S.ws.onclose = () => {
-    setOnline(false);
-    S.reconnTimer = setTimeout(connect, 3000);
+    setAgentOnline(false);
+    if (!S.authBlocked) {
+      S.reconnectTimer = setTimeout(connect, 2500);
+    }
   };
-  S.ws.onerror = () => S.ws.close();
+  S.ws.onerror = () => {
+    try { S.ws.close(); } catch (err) { console.debug(err); }
+  };
 }
 
-function wsSend(obj) {
-  if (S.ws && S.ws.readyState === WebSocket.OPEN)
-    S.ws.send(JSON.stringify(obj));
+function wsSend(payload) {
+  if (!S.ws || S.ws.readyState !== WebSocket.OPEN) {
+    toast('Server bilan aloqa yo\'q.', true);
+    return false;
+  }
+  S.ws.send(JSON.stringify(payload));
+  return true;
 }
 
 function dispatch(msg) {
   switch (msg.type) {
     case 'init':
-      setOnline(msg.agent_connected);
-      if (msg.history && msg.history.length) {
-        msg.history.forEach(function(p) { renderCard(p, false); });
-        scrollEnd();
-      }
+      S.session = msg.session || null;
+      if (S.session) els.userLabel.textContent = S.session.display_name || 'Mini App';
+      setAgentOnline(!!msg.agent_connected);
+      renderStatus(msg.system);
+      clearHistoryDom();
+      (msg.history || []).forEach(upsertEntry);
       break;
-    case 'agent_status': setOnline(msg.connected); break;
-    case 'new_prompt':   renderCard(msg.prompt, true); break;
+    case 'auth_error':
+      S.authBlocked = true;
+      showGate(msg.message || 'Telegram sessiya tekshirilmadi.');
+      break;
+    case 'agent_status':
+      setAgentOnline(!!msg.connected);
+      break;
+    case 'status_snapshot':
+      renderStatus(msg.status);
+      break;
+    case 'new_prompt':
+      upsertEntry(msg.prompt);
+      scrollHistory();
+      break;
+    case 'history_updated':
+      upsertEntry(msg.entry);
+      maybeAskConfirm(msg.entry);
+      scrollHistory();
+      break;
     case 'prompt_sent':
-      setStatus(msg.prompt_id, msg.ok ? 'sent' : 'error', msg.ok ? 'yuborildi' : 'xato');
+      patchEntryStatus(msg.prompt_id, msg.ok ? 'sent' : 'error');
       break;
     case 'screenshot':
       appendScreenshot(msg.prompt_id, msg.kind, msg.image_b64, msg.taken_at);
       break;
-    case 'history_cleared': clearChat(); break;
-    case 'error': toast(msg.message, true); break;
+    case 'history_cleared':
+      clearHistoryDom();
+      break;
+    case 'error':
+      toast(msg.message || 'Xatolik yuz berdi.', true);
+      break;
   }
 }
 
-function setOnline(v) {
-  S.online = v;
-  $badge.className = v ? 'online' : 'badge-offline';
-  $badgeLbl.textContent = v ? 'online' : 'offline';
-  $btnSend.disabled = !v;
+function bindUi() {
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => setMode(btn.dataset.mode));
+  });
+
+  document.querySelectorAll('.quick-action').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const params = readJson(btn.dataset.params);
+      const payload = {
+        action: btn.dataset.action,
+        label: btn.dataset.label || btn.textContent.trim(),
+        params,
+        text: '',
+      };
+      if (btn.dataset.confirm === 'true') {
+        openConfirm(payload);
+      } else {
+        sendCommand(payload);
+      }
+    });
+  });
+
+  els.input.addEventListener('input', () => {
+    autosizeInput();
+    syncSendState();
+  });
+
+  els.input.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      submit();
+    }
+  });
+
+  els.send.addEventListener('click', submit);
+  els.refresh.addEventListener('click', () => wsSend({ type: 'get_status' }));
+  els.clear.addEventListener('click', () => openConfirm({
+    label: 'Tarixni tozalash',
+    clearHistory: true,
+  }));
+
+  els.confirmCancel.addEventListener('click', closeConfirm);
+  els.confirmOk.addEventListener('click', () => {
+    const payload = S.confirmPayload;
+    closeConfirm();
+    if (!payload) return;
+    if (payload.clearHistory) {
+      wsSend({ type: 'clear_history' });
+    } else {
+      sendCommand(payload, true);
+    }
+  });
+  document.querySelector('[data-close="confirm"]').addEventListener('click', closeConfirm);
+
+  els.lightboxClose.addEventListener('click', closeLightbox);
+  els.lightboxBackdrop.addEventListener('click', closeLightbox);
+  els.download.addEventListener('click', downloadLightbox);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      if (!els.lightbox.hidden) closeLightbox();
+      if (!els.confirm.hidden) closeConfirm();
+    }
+  });
 }
 
-function renderCard(prompt, scroll) {
-  if (S.prompts.has(prompt.id)) return;
-  $empty.style.display = 'none';
-
-  var card = document.createElement('article');
-  card.className = 'prompt-card';
-  card.id = 'card-' + prompt.id;
-  card.innerHTML =
-    '<div class="card-head">' +
-      '<div class="card-avatar">&#10022;</div>' +
-      '<div class="card-body">' +
-        '<div class="card-text">' + esc(prompt.text) + '</div>' +
-        '<div class="card-meta">' +
-          '<span class="card-time">' + fmtTime(prompt.created_at) + '</span>' +
-          '<span class="card-status pending" id="st-' + prompt.id + '">' +
-            '<span class="spin-icon"></span> yuborilmoqda' +
-          '</span>' +
-        '</div>' +
-      '</div>' +
-    '</div>' +
-    '<div class="card-actions">' +
-      '<button class="action-btn check" data-pid="' + prompt.id + '" data-kind="check">' +
-        iconEye() + ' Tekshirish' +
-      '</button>' +
-      '<button class="action-btn result" data-pid="' + prompt.id + '" data-kind="result">' +
-        iconCheck() + ' Natija' +
-      '</button>' +
-    '</div>' +
-    '<div class="card-screenshots" id="ss-' + prompt.id + '"></div>';
-
-  $chat.appendChild(card);
-  S.prompts.set(prompt.id, { el: card, screenshots: [] });
-  if (scroll) scrollEnd();
+function setMode(mode) {
+  S.mode = mode === 'claude' ? 'claude' : 'command';
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    const active = btn.dataset.mode === S.mode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  els.input.placeholder = S.mode === 'claude'
+    ? 'Claude prompt yozing...'
+    : 'Buyruq yozing...';
+  syncSendState();
 }
 
-function setStatus(pid, cls, text) {
-  var el = document.getElementById('st-' + pid);
-  if (el) { el.className = 'card-status ' + cls; el.textContent = text; }
+function submit() {
+  const text = els.input.value.trim();
+  if (!text) return;
+  if (!S.agentOnline) {
+    toast('Local agent offline.', true);
+    return;
+  }
+
+  if (S.mode === 'claude') {
+    wsSend({ type: 'send_prompt', text });
+  } else {
+    sendCommand({ text, label: text });
+  }
+
+  haptic('impact');
+  els.input.value = '';
+  autosizeInput();
+  syncSendState();
+  els.input.focus();
 }
 
-function requestScreenshot(pid, kind) {
-  var card = document.getElementById('card-' + pid);
-  if (!card) return;
-  var btn = card.querySelector('.action-btn[data-kind="' + kind + '"]');
-  if (btn) btn.classList.add('loading');
-  wsSend({ type: 'screenshot', prompt_id: pid, kind: kind });
-  var key = pid + kind;
-  clearTimeout(S.ssTimers.get(key));
-  S.ssTimers.set(key, setTimeout(function() {
-    if (btn) btn.classList.remove('loading');
-    S.ssTimers.delete(key);
-  }, SS_TIMEOUT_MS));
+function sendCommand(payload, confirmed) {
+  if (!S.agentOnline) {
+    toast('Local agent offline.', true);
+    return;
+  }
+  wsSend({
+    type: 'run_command',
+    text: payload.text || '',
+    action: payload.action || '',
+    label: payload.label || payload.text || payload.action,
+    params: payload.params || {},
+    confirmed: !!confirmed,
+  });
+  haptic(confirmed ? 'notification' : 'selection');
 }
 
-function appendScreenshot(pid, kind, b64, takenAt) {
-  var container = document.getElementById('ss-' + pid);
-  if (!container) return;
-  var card = document.getElementById('card-' + pid);
-  var btn  = card && card.querySelector('.action-btn[data-kind="' + kind + '"]');
-  if (btn) btn.classList.remove('loading');
-  var key = pid + kind;
-  clearTimeout(S.ssTimers.get(key));
-  S.ssTimers.delete(key);
+function setAgentOnline(online) {
+  S.agentOnline = online;
+  els.badge.classList.toggle('online', online);
+  els.badge.classList.toggle('offline', !online);
+  els.badgeLabel.textContent = online ? 'online' : 'offline';
+  els.metricAgent.textContent = online ? 'online' : 'offline';
+  document.querySelectorAll('.quick-action').forEach(btn => {
+    btn.disabled = !online;
+  });
+  syncSendState();
+}
 
-  var src   = 'data:image/png;base64,' + b64;
-  var label = kind === 'check' ? 'Tekshirish' : 'Natija';
-  var time  = fmtTime(takenAt);
-  var entry = S.prompts.get(pid);
-  var count = entry ? entry.screenshots.filter(function(s){ return s.kind === kind; }).length + 1 : 1;
+function syncSendState() {
+  const enabled = S.agentOnline && !!els.input.value.trim();
+  els.send.disabled = !enabled;
+  if (tg && tg.MainButton) {
+    if (enabled) {
+      tg.MainButton.setText(S.mode === 'claude' ? 'Prompt yuborish' : 'Buyruq yuborish');
+      tg.MainButton.show();
+    } else {
+      tg.MainButton.hide();
+    }
+  }
+}
 
-  var item = document.createElement('div');
-  item.className = 'ss-item';
-  item.innerHTML =
-    '<div class="ss-meta">' +
-      '<span class="ss-badge ' + kind + '">' + label + '</span>' +
-      '<span class="ss-time">' + time + '</span>' +
-      (count > 1 ? '<span class="ss-count">#' + count + '</span>' : '') +
-    '</div>' +
-    '<img class="ss-img" alt="' + label + '" loading="lazy" />';
+function renderStatus(status) {
+  if (!status) return;
+  setMetric(els.metricCpu, status.cpu == null ? '--' : `${status.cpu}%`);
+  setMetric(els.metricRam, status.ram == null ? '--' : `${status.ram}%`);
+  if (status.battery == null) {
+    setMetric(els.metricBattery, '--');
+  } else {
+    setMetric(els.metricBattery, `${status.battery}%${status.charging ? '+' : ''}`);
+  }
+  if (S.agentOnline && status.hostname) {
+    els.metricAgent.textContent = status.hostname;
+  }
+}
 
-  var img = item.querySelector('.ss-img');
+function setMetric(node, value) {
+  node.textContent = value;
+}
+
+function upsertEntry(rawEntry) {
+  if (!rawEntry || !rawEntry.id) return;
+  const entry = normalizeEntry(rawEntry);
+  const current = S.entries.get(entry.id) || { screenshots: [] };
+  current.entry = entry;
+  S.entries.set(entry.id, current);
+
+  const card = buildEntryCard(entry, current.screenshots);
+  const old = document.getElementById(`entry-${entry.id}`);
+  if (old) {
+    old.replaceWith(card);
+  } else {
+    els.empty.hidden = true;
+    els.history.appendChild(card);
+  }
+}
+
+function normalizeEntry(entry) {
+  return {
+    id: entry.id,
+    kind: entry.kind || 'claude',
+    text: entry.text || '',
+    status: entry.status || 'queued',
+    result: entry.result || '',
+    action: entry.action || '',
+    data: entry.data || {},
+    created_at: entry.created_at || new Date().toISOString(),
+  };
+}
+
+function buildEntryCard(entry, screenshots) {
+  const card = create('article', 'history-card');
+  card.id = `entry-${entry.id}`;
+
+  const head = create('div', 'entry-head');
+  const title = create('div', 'entry-title');
+  title.append(
+    create('span', 'entry-kind', entry.kind === 'claude' ? 'Claude' : 'Buyruq'),
+    create('span', 'entry-time', fmtTime(entry.created_at))
+  );
+  head.append(title, create('span', `entry-status ${entry.status}`, statusLabel(entry.status)));
+
+  const body = create('div', 'entry-body');
+  body.appendChild(create('div', 'entry-text', entry.text));
+  if (entry.result) {
+    body.appendChild(create('div', 'entry-result', entry.result));
+  }
+
+  card.append(head, body);
+
+  if (entry.kind === 'claude') {
+    const actions = create('div', 'entry-actions');
+    actions.append(
+      entryAction('Tekshirish', entry.id, 'check'),
+      entryAction('Natija', entry.id, 'result')
+    );
+    card.appendChild(actions);
+  }
+
+  const images = [];
+  if (entry.data && entry.data.image_b64) {
+    images.push({
+      kind: entry.data.kind || 'result',
+      b64: entry.data.image_b64,
+      takenAt: entry.completed_at || new Date().toISOString(),
+    });
+  }
+  images.push(...screenshots);
+  if (images.length) {
+    const media = create('div', 'media-grid');
+    media.id = `media-${entry.id}`;
+    images.forEach((shot, index) => media.appendChild(shotNode(shot, index)));
+    card.appendChild(media);
+  }
+
+  return card;
+}
+
+function entryAction(label, id, kind) {
+  const btn = create('button', 'entry-action');
+  btn.type = 'button';
+  btn.append(icon(kind === 'check' ? 'eye' : 'check'), document.createTextNode(label));
+  btn.addEventListener('click', () => {
+    if (!S.agentOnline) {
+      toast('Local agent offline.', true);
+      return;
+    }
+    wsSend({ type: 'screenshot', prompt_id: id, kind });
+  });
+  return btn;
+}
+
+function shotNode(shot, index) {
+  const wrap = create('div', 'shot');
+  const src = `data:image/png;base64,${shot.b64}`;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  const img = document.createElement('img');
   img.src = src;
-  img.addEventListener('click', function() { openLightbox(src, label + ' \u00b7 ' + time); });
+  img.alt = shot.kind || 'screenshot';
+  img.loading = 'lazy';
+  btn.appendChild(img);
+  btn.addEventListener('click', () => openLightbox(src, `${shot.kind || 'screenshot'} ${fmtTime(shot.takenAt)}`));
+  const cap = create('div', 'shot-caption');
+  cap.append(
+    create('span', '', shot.kind === 'check' ? 'Tekshirish' : shot.kind === 'screen' ? 'Skrinshot' : 'Natija'),
+    create('span', '', `${fmtTime(shot.takenAt)}${index ? ` #${index + 1}` : ''}`)
+  );
+  wrap.append(btn, cap);
+  return wrap;
+}
 
-  container.appendChild(item);
-  if (entry) entry.screenshots.push({ kind: kind, b64: b64, takenAt: takenAt });
-  scrollEnd();
+function appendScreenshot(id, kind, b64, takenAt) {
+  if (!id || !b64) {
+    toast('Skrinshot kelmadi.', true);
+    return;
+  }
+  const current = S.entries.get(id);
+  if (!current) return;
+  current.screenshots.push({ kind, b64, takenAt });
+  upsertEntry(current.entry);
+  scrollHistory();
+}
+
+function patchEntryStatus(id, status) {
+  const current = S.entries.get(id);
+  if (!current) return;
+  current.entry.status = status;
+  upsertEntry(current.entry);
+}
+
+function maybeAskConfirm(entry) {
+  if (!entry || !entry.data || !entry.data.needs_confirm || S.confirmAsked.has(entry.id)) {
+    return;
+  }
+  S.confirmAsked.add(entry.id);
+  openConfirm({
+    action: entry.data.action || entry.action,
+    label: entry.text,
+    text: entry.text,
+  });
+}
+
+function openConfirm(payload) {
+  S.confirmPayload = payload;
+  els.confirmText.textContent = payload.clearHistory
+    ? 'Tarix tozalansinmi?'
+    : `${payload.label || 'Buyruq'} bajarilsinmi?`;
+  els.confirm.hidden = false;
+  haptic('warning');
+}
+
+function closeConfirm() {
+  els.confirm.hidden = true;
+  S.confirmPayload = null;
 }
 
 function openLightbox(src, label) {
-  S.lbSrc = src; S.lbLabel = label;
-  $lbImg.src = src;
-  $lbLabel.textContent = label;
-  $lightbox.hidden = false;
+  S.lightboxSrc = src;
+  S.lightboxLabel = label;
+  els.lightboxImg.src = src;
+  els.lightboxLabel.textContent = label;
+  els.lightbox.hidden = false;
   document.body.style.overflow = 'hidden';
 }
 
 function closeLightbox() {
-  $lightbox.hidden = true;
-  $lbImg.src = '';
+  els.lightbox.hidden = true;
+  els.lightboxImg.src = '';
   document.body.style.overflow = '';
 }
 
-$lbClose.addEventListener('click', closeLightbox);
-document.getElementById('lightbox-backdrop').addEventListener('click', closeLightbox);
-$lbDl.addEventListener('click', function() {
-  var a = document.createElement('a');
-  a.href = S.lbSrc;
-  a.download = 'ghost-' + Date.now() + '.png';
+function downloadLightbox() {
+  if (!S.lightboxSrc) return;
+  const a = document.createElement('a');
+  a.href = S.lightboxSrc;
+  a.download = `ghost-${Date.now()}.png`;
   a.click();
-});
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape' && !$lightbox.hidden) closeLightbox();
-});
-
-$input.addEventListener('input', function() {
-  $input.style.height = 'auto';
-  $input.style.height = Math.min($input.scrollHeight, 130) + 'px';
-  $btnSend.disabled = !S.online || !$input.value.trim();
-});
-
-$input.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
-});
-
-$btnSend.addEventListener('click', submit);
-
-function submit() {
-  var text = $input.value.trim();
-  if (!text || !S.online) return;
-  wsSend({ type: 'send_prompt', text: text });
-  $input.value = '';
-  $input.style.height = 'auto';
-  $btnSend.disabled = true;
-  $input.focus();
 }
 
-$chat.addEventListener('click', function(e) {
-  var btn = e.target.closest('.action-btn');
-  if (!btn) return;
-  var pid = btn.dataset.pid, kind = btn.dataset.kind;
-  if (pid && kind) requestScreenshot(pid, kind);
-});
-
-$btnClear.addEventListener('click', function() {
-  if (!confirm("Barcha tarixni o'chirish?")) return;
-  wsSend({ type: 'clear_history' });
-});
-
-function clearChat() {
-  $chat.innerHTML = '';
-  $chat.appendChild($empty);
-  $empty.style.display = '';
-  S.prompts.clear();
+function clearHistoryDom() {
+  S.entries.clear();
+  S.confirmAsked.clear();
+  Array.from(els.history.querySelectorAll('.history-card')).forEach(node => node.remove());
+  els.empty.hidden = false;
 }
 
-function scrollEnd() {
-  requestAnimationFrame(function() { $chat.scrollTop = $chat.scrollHeight; });
+function autosizeInput() {
+  els.input.style.height = 'auto';
+  els.input.style.height = `${Math.min(els.input.scrollHeight, 132)}px`;
+}
+
+function showGate(message) {
+  els.gateMessage.textContent = message;
+  els.gate.hidden = false;
+}
+
+function scrollHistory() {
+  requestAnimationFrame(() => {
+    const scroller = $('content');
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+}
+
+function toast(message, error) {
+  els.toast.textContent = message;
+  els.toast.className = `show${error ? ' error' : ''}`;
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    els.toast.className = '';
+  }, 3200);
+}
+
+function haptic(kind) {
+  try {
+    if (!tg || !tg.HapticFeedback) return;
+    if (kind === 'notification' || kind === 'warning') {
+      tg.HapticFeedback.notificationOccurred(kind === 'warning' ? 'warning' : 'success');
+    } else if (kind === 'impact') {
+      tg.HapticFeedback.impactOccurred('light');
+    } else {
+      tg.HapticFeedback.selectionChanged();
+    }
+  } catch (err) {
+    console.debug(err);
+  }
+}
+
+function readJson(value) {
+  if (!value) return {};
+  try {
+    return JSON.parse(value);
+  } catch (err) {
+    console.debug(err);
+    return {};
+  }
 }
 
 function fmtTime(iso) {
   if (!iso) return '';
-  try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-  catch(e) { return ''; }
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (err) {
+    return '';
+  }
 }
 
-function esc(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function statusLabel(status) {
+  const labels = {
+    queued: 'kutilmoqda',
+    sent: 'yuborildi',
+    done: 'bajarildi',
+    error: 'xato',
+  };
+  return labels[status] || status || 'kutilmoqda';
 }
 
-var _toastTimer;
-function toast(msg, isErr) {
-  $toast.textContent = msg;
-  $toast.className = 'show' + (isErr ? ' error' : '');
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(function() { $toast.className = ''; }, 3000);
+function create(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
 }
 
-function iconEye() {
-  return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-}
-function iconCheck() {
-  return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+function icon(name) {
+  const span = document.createElement('span');
+  span.innerHTML = icons[name] || icons.check;
+  return span.firstElementChild;
 }
 
-connect();
-$input.focus();
+const icons = {
+  eye: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>',
+};

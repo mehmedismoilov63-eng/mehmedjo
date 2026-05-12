@@ -13,6 +13,9 @@ if exist "..\ghost_env\Scripts\activate.bat" (
     call ..\ghost_env\Scripts\activate.bat
 )
 
+REM Lokal brauzerda test qilish uchun Telegram auth o'chiriladi.
+if "%GHOST_REQUIRE_TELEGRAM_AUTH%"=="" set GHOST_REQUIRE_TELEGRAM_AUTH=false
+
 REM Backend
 echo  [1/2] Backend: http://localhost:8000
 start "GHOST Backend" cmd /k "cd /d "%~dp0backend" && python main.py"
